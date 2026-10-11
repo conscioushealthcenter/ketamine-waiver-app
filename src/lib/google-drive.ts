@@ -1,6 +1,39 @@
-import { OAuth2Client } from 'google-auth-library'
+import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 
 let cachedClient: OAuth2Client | null = null
+let cachedServiceAuth: GoogleAuth | null = null
+
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
+
+/**
+ * Preferred auth: a service account that is a member of the target Shared
+ * Drive folder. GOOGLE_SERVICE_ACCOUNT_JSON is the key file contents, either
+ * raw JSON or base64-encoded. Falls back to the legacy OAuth refresh token
+ * when it is not set, so the switch (and a rollback) is just an env var.
+ */
+function getServiceAccountAuth(): GoogleAuth | null {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+  if (!raw) return null
+  if (cachedServiceAuth) return cachedServiceAuth
+
+  const text = raw.trim().startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf-8')
+  cachedServiceAuth = new GoogleAuth({ credentials: JSON.parse(text), scopes: [DRIVE_SCOPE] })
+  return cachedServiceAuth
+}
+
+async function getAccessToken(): Promise<string> {
+  const serviceAuth = getServiceAccountAuth()
+  if (serviceAuth) {
+    const client = await serviceAuth.getClient()
+    const { token } = await client.getAccessToken()
+    if (!token) throw new Error('Failed to obtain Google Drive access token (service account)')
+    return token
+  }
+
+  const { token } = await getClient().getAccessToken()
+  if (!token) throw new Error('Failed to obtain Google Drive access token')
+  return token
+}
 
 function getClient(): OAuth2Client {
   if (cachedClient) return cachedClient
@@ -32,6 +65,9 @@ async function listPatientFolders(token: string, parentId: string): Promise<{ id
     url.searchParams.set('q', q)
     url.searchParams.set('fields', 'nextPageToken, files(id,name)')
     url.searchParams.set('pageSize', '1000')
+    url.searchParams.set('supportsAllDrives', 'true')
+    url.searchParams.set('includeItemsFromAllDrives', 'true')
+    url.searchParams.set('corpora', 'allDrives')
     if (pageToken) url.searchParams.set('pageToken', pageToken)
 
     const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
@@ -63,7 +99,7 @@ async function findOrCreatePatientFolder(token: string, parentId: string, folder
     return match.id
   }
 
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -85,10 +121,10 @@ async function findOrCreatePatientFolder(token: string, parentId: string, folder
 
 /**
  * Uploads a PDF (as raw bytes) into a per-patient subfolder of the
- * configured Google Drive folder (creating the subfolder if needed), using
- * OAuth credentials for the Google account that owns (or has edit access
- * to) that folder. Requires a one-time-obtained long-lived refresh token
- * (see scripts/get-google-refresh-token.mjs).
+ * configured Google Drive folder (creating the subfolder if needed). The
+ * folder may live in a Shared Drive. Auth is the service account in
+ * GOOGLE_SERVICE_ACCOUNT_JSON when set, otherwise the legacy OAuth refresh
+ * token (see scripts/get-google-refresh-token.mjs).
  */
 export async function uploadPdfToDrive(pdfBytes: Uint8Array, filename: string, patientFolderName: string): Promise<string> {
   const rootFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
@@ -96,11 +132,7 @@ export async function uploadPdfToDrive(pdfBytes: Uint8Array, filename: string, p
     throw new Error('Missing GOOGLE_DRIVE_FOLDER_ID env var')
   }
 
-  const client = getClient()
-  const { token } = await client.getAccessToken()
-  if (!token) {
-    throw new Error('Failed to obtain Google Drive access token')
-  }
+  const token = await getAccessToken()
 
   const patientFolderId = await findOrCreatePatientFolder(token, rootFolderId, patientFolderName)
 
@@ -123,7 +155,7 @@ export async function uploadPdfToDrive(pdfBytes: Uint8Array, filename: string, p
     Buffer.from(closing, 'utf-8'),
   ])
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id&supportsAllDrives=true', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
