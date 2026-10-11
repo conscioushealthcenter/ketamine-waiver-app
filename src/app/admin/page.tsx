@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 
 interface WaiverEntry {
-  pathname: string
+  id: string
+  name: string
   uploadedAt: string
 }
 
@@ -47,8 +48,8 @@ export default function AdminPage() {
     setPatients(data.patients)
   }
 
-  const download = async (pathname: string) => {
-    const res = await fetch(`/api/admin/download?pathname=${encodeURIComponent(pathname)}`, {
+  const download = async (id: string, name: string) => {
+    const res = await fetch(`/api/admin/download?id=${encodeURIComponent(id)}`, {
       headers: authHeaders,
     })
     if (!res.ok) return
@@ -56,7 +57,7 @@ export default function AdminPage() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = pathname.split('/').pop() || 'waiver.pdf'
+    a.download = name || 'waiver.pdf'
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -152,16 +153,16 @@ export default function AdminPage() {
               </div>
 
               {(expanded[name] ?? true) && patients[name].map((waiver, i) => (
-                <div key={waiver.pathname} className="waiver-item">
+                <div key={waiver.id} className="waiver-item">
                   <div>
                     <div className="waiver-date">{formatDate(waiver.uploadedAt)}</div>
                     <div style={{ fontSize: '0.7rem', color: '#b0ae9a', marginTop: '0.15rem' }}>
-                      {waiver.pathname.split('/').pop()}
+                      {waiver.name}
                     </div>
                   </div>
                   <button
                     className="download-btn"
-                    onClick={() => download(waiver.pathname)}
+                    onClick={() => download(waiver.id, waiver.name)}
                   >
                     Download PDF
                   </button>

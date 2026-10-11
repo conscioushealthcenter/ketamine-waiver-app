@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
-import { put } from '@vercel/blob'
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 import { uploadPdfToDrive } from '@/lib/google-drive'
-import { getOrCreatePatientSlug } from '@/lib/blob-patient'
 
 function methodLabel(method: string, other: string, friend: string) {
   if (method === 'uber_lyft') return 'Uber / Lyft'
@@ -192,25 +190,11 @@ export async function POST(req: Request) {
 
     const pdfBytes = await pdfDoc.save()
 
-    // Upload to Vercel Blob (source of truth for the /admin panel), reusing
-    // an existing patient folder on a normalized name match if one exists.
-    const slug = await getOrCreatePatientSlug(patientName)
+    // Google Drive is the only store. If the upload fails we return an
+    // error (caught below) so the patient and staff know to retry — there is
+    // no second copy to fall back on.
     const dateSlug = new Date().toISOString().split('T')[0]
-    const filename = `waivers/${slug}/${dateSlug}-${Date.now()}.pdf`
-
-    await put(filename, Buffer.from(pdfBytes), {
-      access: 'private',
-      contentType: 'application/pdf',
-    })
-
-    // Also save a copy to Google Drive, filed into a per-patient subfolder.
-    // Non-fatal: if Drive is misconfigured or unreachable, the submission
-    // still succeeds since Blob already has it.
-    try {
-      await uploadPdfToDrive(pdfBytes, `${dateSlug}-${Date.now()}.pdf`, patientName.trim())
-    } catch (err) {
-      console.error('Google Drive upload failed (non-fatal, Blob copy still saved):', err)
-    }
+    await uploadPdfToDrive(pdfBytes, `${dateSlug}-${Date.now()}.pdf`, patientName.trim())
 
     return NextResponse.json({ success: true })
   } catch (err) {
